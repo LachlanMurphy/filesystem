@@ -23,6 +23,7 @@
 #include <string.h>
 #include <sys/sendfile.h>
 #include <fcntl.h>
+#include <openssl/md5.h>
 
 #define BUFFERSIZE 2048
 #define NUM_SERVERS 4
@@ -81,7 +82,7 @@ int main(int argc, char** argv) {
         for (int i = 0; i < NUM_SERVERS; i++) {
             if (server_connect(&server_socket, server, &serveraddr, server_addr[i], portno[i]) < 0) continue;
             
-            if (send(server_socket, "LIST NULL", BUFFERSIZE, 0) < 0) error("ERROR in send");
+            if (send(server_socket, "LIST NULL NULL", BUFFERSIZE, 0) < 0) error("ERROR in send");
 
             while (1) {
                 char filename[BUFFERSIZE];
@@ -145,6 +146,81 @@ int main(int argc, char** argv) {
 
         // deallocate the array
         free(files);
+    } else if (!strncmp(argv[1], "put", sizeof("put"))) {
+        // put each file in the command line
+        for (int file_num = 2; file_num < argc; file_num++) {
+            unsigned char hash_bin[BUFFERSIZE] = {0};
+            unsigned long long hash_offset;
+            unsigned long file_size;
+            time_t put_time;
+            int server_socket;
+            struct hostent* server = NULL;
+            struct sockaddr_in serveraddr;
+
+            // attempt to open file
+            FILE* file = fopen(argv[file_num], "r");
+            if (!file) {
+                printf("File %s does not exist\n", argv[file_num]);
+                continue;
+            }
+
+            // hash filename to determine where to go
+            MD5_CTX md5_context;
+            MD5_Init(&md5_context);
+            MD5_Update(&md5_context, argv[file_num], sizeof(argv[file_num]));
+            MD5_Final(hash_bin, &md5_context);
+
+            for (int i = 0; i < 8; i++) hash_offset |= (unsigned long long)hash_bin[i] << (i * 8);
+            hash_offset %= 4;
+
+            put_time = time(NULL);
+
+            //split file into chunks and send
+            fseek(file, 0, SEEK_END);
+            file_size = ftell(file);
+            fseek(file, 0, SEEK_SET);
+
+            int servers_down = 0;
+            for (int file_part = 0; file_part < NUM_SERVERS; file_part++) {
+                char part_name[BUFFERSIZE];
+                unsigned long write_end = (file_part+1)*(file_size/NUM_SERVERS)+1;
+                int server_index = (hash_offset+file_part) % NUM_SERVERS;
+                if (file_part == NUM_SERVERS - 1) write_end = file_size;
+
+                sprintf(part_name, "PUT %.10ld:%d:%s %ld", put_time, file_part+1, argv[file_num], write_end-file_part*(file_size/NUM_SERVERS));
+                
+                // connect to server
+                if (server_connect(&server_socket, server, &serveraddr, server_addr[server_index], portno[server_index]) < 0) {
+                    servers_down++;
+                } else {
+                    // send header so server knows file is coming
+                    if (send(server_socket, part_name, strlen(part_name)+1, 0) < 0) error("ERROR in send");
+
+                    // send file part over
+                    off_t offset = file_part*(file_size/NUM_SERVERS);
+                    printf("part: %d ; offset=%ld ; count=%ld\n", file_part, offset, write_end-offset);
+                    if (sendfile(server_socket, fileno(file), &offset, write_end-offset) < 0) error("ERROR in sendfile1");
+                    
+                }
+                close(server_socket);
+
+                // attempt to send to next server
+                server_index = (server_index+1) % NUM_SERVERS;
+                if (server_connect(&server_socket, server, &serveraddr, server_addr[server_index], portno[server_index]) < 0) {
+                    servers_down++;
+                } else {
+                    // send header so server knows file is coming
+                    if (send(server_socket, part_name, strlen(part_name)+1, 0) < 0) error("ERROR in send");
+
+                    // send file part over
+                    off_t offset = file_part*(file_size/NUM_SERVERS);
+
+                    if (sendfile(server_socket, fileno(file), &offset, write_end-offset) < 0) error("ERROR in sendfile");
+                    
+                }
+                close(server_socket);
+            }
+        }
     }
 }
 

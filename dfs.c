@@ -152,12 +152,13 @@ void* socket_handler(void* arg) {
     socket_arg_t* args = (socket_arg_t *) arg;
     char buf[BUFFERSIZE];
     bzero(buf, BUFFERSIZE);
+    unsigned long file_size;
 
     // read in message
     if (read(args->clientfd, buf, BUFFERSIZE) < 0) error("ERROR in reading from socket");\
 
     // parse message
-    char req[2][BUFFERSIZE]; // req[0]=command ; req[1]=file
+    char req[3][BUFFERSIZE/2]; // req[0]=command ; req[1]=file ; req[3]=file_size
     char* tmp;
     for (int i = 0; i < 2; i++) {
         if (i == 0) tmp = strtok(buf, " ");
@@ -179,6 +180,25 @@ void* socket_handler(void* arg) {
 
         if (send(args->clientfd, "END_SEND", strlen("END_SEND")+1, 0) < 0) error("ERROR in send");
         closedir(dr);
+    } else if (!strncmp(req[0], "PUT", BUFFERSIZE)) {
+        unsigned long rec;
+        char file_name[BUFFERSIZE*2];
+        printf("Length: %s\n", req[2]);
+        file_size = strtol(req[2], NULL, 10);
+        // open file
+        sprintf(file_name, "./%s/%s", server_dir, req[1]);
+        FILE* file = fopen(file_name, "w");
+
+        rec = 0;
+        printf("File size: %ld\n", file_size);
+        while (rec < file_size) {
+            int n;
+            if ((n = recv(args->clientfd, buf, BUFFERSIZE, 0)) < 0) error("ERROR in recv");
+            rec += n;
+            printf("buf: %s read %d\n", buf, n);
+            fwrite(buf, 1, n, file);
+        }
+        fclose(file);
     }
 
     // socket no longer needed
