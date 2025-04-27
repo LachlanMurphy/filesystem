@@ -68,7 +68,7 @@ int main(int argc, char** argv) {
     * check command line arguments
     */
     if (argc != 3) {
-        fprintf(stderr, "usage: %s <port>\n", argv[0]);
+        fprintf(stderr, "usage: %s <server directory> <port>\n", argv[0]);
         exit(1);
     }
     portno = atoi(argv[2]);
@@ -78,7 +78,7 @@ int main(int argc, char** argv) {
     // check/create server dir
     struct stat st = {0};
     if (stat(argv[1], &st) == -1) {
-        mkdir(argv[1], 777);
+        mkdir(argv[1], 0700);
     }
 
     // set up signal handling
@@ -141,7 +141,6 @@ int main(int argc, char** argv) {
 }
 
 void sigint_handler(int sig) {
-    print_array(&socks);
     // wait for all sockets to finish computing
     while (socks.size);
     array_free(&socks);
@@ -155,25 +154,32 @@ void* socket_handler(void* arg) {
     bzero(buf, BUFFERSIZE);
 
     // read in message
-    if (read(args->clientfd, buf, BUFFERSIZE) < 0) error("ERROR in reading from socket");
-    printf("%s", buf);
+    if (read(args->clientfd, buf, BUFFERSIZE) < 0) error("ERROR in reading from socket");\
 
     // parse message
     char req[2][BUFFERSIZE]; // req[0]=command ; req[1]=file
     char* tmp;
-    int parse_err = 0;
     for (int i = 0; i < 2; i++) {
         if (i == 0) tmp = strtok(buf, " ");
         else tmp = strtok(NULL, " ");
-
-        if (!tmp) {
-            parse_err = 1;
-            break;
-        }
         memcpy(req[i], tmp, BUFFERSIZE);
     }
 
+    // handle command:
+    if (!strncmp(req[0], "LIST", BUFFERSIZE)) {
+        struct dirent *de;
+        DIR *dr; 
+        if (!(dr = opendir(server_dir))) error("ERROR opening directory");
+        printf("Start send...\n");
+        while ((de = readdir(dr)) != NULL) {
+            if (de->d_name[0] == '.') continue;
 
+            if (send(args->clientfd, de->d_name, strlen(de->d_name)+1, 0) < 0) error("ERROR in send");
+        }
+
+        if (send(args->clientfd, "END_SEND", strlen("END_SEND")+1, 0) < 0) error("ERROR in send");
+        closedir(dr);
+    }
 
     // socket no longer needed
     close(args->clientfd);
