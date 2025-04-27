@@ -151,19 +151,21 @@ void sigint_handler(int sig) {
 void* socket_handler(void* arg) {
     socket_arg_t* args = (socket_arg_t *) arg;
     char buf[BUFFERSIZE];
+    char token_buf[BUFFERSIZE];
     bzero(buf, BUFFERSIZE);
     unsigned long file_size;
+    int n;
 
     // read in message
-    if (read(args->clientfd, buf, BUFFERSIZE) < 0) error("ERROR in reading from socket");\
-
+    if ((n = read(args->clientfd, buf, BUFFERSIZE)) < 0) error("ERROR in reading from socket");
+    strncpy(token_buf, buf, n);
     // parse message
     char req[3][BUFFERSIZE/2]; // req[0]=command ; req[1]=file ; req[3]=file_size
     char* tmp;
-    for (int i = 0; i < 2; i++) {
-        if (i == 0) tmp = strtok(buf, " ");
+    for (int i = 0; i < 3; i++) {
+        if (i == 0) tmp = strtok(token_buf, " ");
         else tmp = strtok(NULL, " ");
-        memcpy(req[i], tmp, BUFFERSIZE);
+        memcpy(req[i], tmp, strlen(tmp));
     }
 
     // handle command:
@@ -171,7 +173,7 @@ void* socket_handler(void* arg) {
         struct dirent *de;
         DIR *dr; 
         if (!(dr = opendir(server_dir))) error("ERROR opening directory");
-        printf("Start send...\n");
+
         while ((de = readdir(dr)) != NULL) {
             if (de->d_name[0] == '.') continue;
 
@@ -183,20 +185,23 @@ void* socket_handler(void* arg) {
     } else if (!strncmp(req[0], "PUT", BUFFERSIZE)) {
         unsigned long rec;
         char file_name[BUFFERSIZE*2];
-        printf("Length: %s\n", req[2]);
+
         file_size = strtol(req[2], NULL, 10);
         // open file
         sprintf(file_name, "./%s/%s", server_dir, req[1]);
         FILE* file = fopen(file_name, "w");
 
         rec = 0;
-        printf("File size: %ld\n", file_size);
         while (rec < file_size) {
-            int n;
-            if ((n = recv(args->clientfd, buf, BUFFERSIZE, 0)) < 0) error("ERROR in recv");
-            rec += n;
-            printf("buf: %s read %d\n", buf, n);
-            fwrite(buf, 1, n, file);
+            if (rec == 0) {
+                fwrite(buf+strlen(buf)+1, 1, n - strlen(buf) - 1, file);
+                rec += n-strlen(buf) - 1;
+            } else {
+                if ((n = recv(args->clientfd, buf, BUFFERSIZE, 0)) < 0) error("ERROR in recv");
+                rec += n;
+                if (n == 0) break;
+                fwrite(buf, 1, n, file);
+            }
         }
         fclose(file);
     }

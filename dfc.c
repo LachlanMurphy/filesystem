@@ -198,7 +198,6 @@ int main(int argc, char** argv) {
 
                     // send file part over
                     off_t offset = file_part*(file_size/NUM_SERVERS);
-                    printf("part: %d ; offset=%ld ; count=%ld\n", file_part, offset, write_end-offset);
                     if (sendfile(server_socket, fileno(file), &offset, write_end-offset) < 0) error("ERROR in sendfile1");
                     
                 }
