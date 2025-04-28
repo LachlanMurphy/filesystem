@@ -323,7 +323,8 @@ int main(int argc, char** argv) {
                                     printf("%s is incomplete\n", argv[file_num]);
                                     break;
                                 }
-                                file_part++;
+                                server_index += 1;
+                                server_index %= NUM_SERVERS;
                                 file_success = 0;
                                 goto server_retry;
                             }
@@ -339,7 +340,7 @@ int main(int argc, char** argv) {
                                 int n;
                                 bzero(buf, BUFFERSIZE);
                                 if ((n = recv(server_socket, buf, BUFFERSIZE, 0)) < 0) error("ERROR in recv");
-                                fwrite(buf, 1, 100, stdout);
+                                
                                 char* line = buf;
                                 int end_signal = 0;
                                 while (1) {
