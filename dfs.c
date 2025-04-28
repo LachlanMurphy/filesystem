@@ -165,7 +165,7 @@ void* socket_handler(void* arg) {
     for (int i = 0; i < 3; i++) {
         if (i == 0) tmp = strtok(token_buf, " ");
         else tmp = strtok(NULL, " ");
-        memcpy(req[i], tmp, strlen(tmp));
+        memcpy(req[i], tmp, strlen(tmp)+1);
     }
 
     // handle command:
@@ -204,6 +204,19 @@ void* socket_handler(void* arg) {
             }
         }
         fclose(file);
+    } else if (!strncmp(req[0], "GET", BUFFERSIZE)) {
+        char filename[BUFFERSIZE*2];
+        sprintf(filename, "%s/%s", server_dir, req[1]);
+        FILE* file = fopen(filename, "r");
+
+        unsigned long file_size;
+        fseek(file, 0, SEEK_END);
+        file_size = ftell(file);
+        fseek(file, 0, SEEK_SET);
+        
+        off_t offset;
+        if (sendfile(args->clientfd, fileno(file), &offset, file_size) < 0) error("ERROR in sendfile");
+        if (send(args->clientfd, "END_SEND", sizeof("END_SEND"), 0) < 0) error("ERROR in send");
     }
 
     // socket no longer needed

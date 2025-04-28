@@ -220,6 +220,153 @@ int main(int argc, char** argv) {
                 close(server_socket);
             }
         }
+    } else if (!strncmp(argv[1], "get", strlen("get"))) {
+        char buf[BUFFERSIZE];
+        unsigned char hash_bin[BUFFERSIZE] = {0};
+        unsigned long long hash_offset;
+        int server_socket;
+        struct hostent* server = NULL;
+        struct sockaddr_in serveraddr;
+        file_status_t* files = malloc(sizeof(file_status_t));
+        int num_files = 0;
+        int files_len = 1;
+
+        // determine which version of the files to get
+        for (int i = 0; i < NUM_SERVERS; i++) {
+            if (server_connect(&server_socket, server, &serveraddr, server_addr[i], portno[i]) < 0) continue;
+            
+            if (send(server_socket, "LIST NULL NULL", BUFFERSIZE, 0) < 0) error("ERROR in send");
+            while (1) {
+                char filename[BUFFERSIZE];
+                int part;
+                time_t time;
+                int c;
+                bzero(buf, BUFFERSIZE);
+                if ((c = recv(server_socket, buf, BUFFERSIZE, 0)) < 0) error("ERROR in recv");
+
+                char* line = buf;
+                int end_signal = 0;
+                while(1) {
+                    if (!strncmp(line, "END_SEND", strlen("END_SEND"))) {end_signal = 1; break;}
+
+                    parse_filename(line, &time, &part, filename);
+
+                    int i;
+                    for (i = 0; i < num_files; i++) 
+                        if (!strncmp(filename, files[i].filename, BUFFERSIZE) && time == files[i].time) break;
+                    
+                    if (i == num_files) { // file doesn't exist in array
+                        if (files_len == num_files) {
+                            files = realloc(files, files_len*2*sizeof(file_status_t));
+                            files_len *= 2;
+                        }
+
+                        strncpy(files[num_files].filename, filename, BUFFERSIZE);
+                        files[num_files].parts[part-1] = 1;
+                        files[num_files].disp = 1;
+                        files[num_files].time = time;
+                        num_files++;
+                    } else { // file does exist in array
+                        files[i].parts[part-1] = 1;
+                    }
+
+                    line += strlen(line) + 1;
+                    if (strlen(line) == 0) break;
+                }
+                if (end_signal) break;
+            }
+        }
+
+        // sort
+        qsort(files, num_files, sizeof(file_status_t), compare_filestatus);
+        
+        // this could probably have better time complexity but i'm tired
+        // loop through arg files and get each file that exists in the got files
+        for (int file_num = 2; file_num < argc; file_num++) {
+            // loop through each value of files to see if the file we want exists there
+            for (int file_instance = 0; file_instance < files_len; file_instance++) {
+                // check if this is the file we want
+                if (!strncmp(files[file_instance].filename, argv[file_num], BUFFERSIZE) && files[file_instance].disp) {
+                    if (files[file_instance].parts[0] + 
+                        files[file_instance].parts[1] + 
+                        files[file_instance].parts[2] + 
+                        files[file_instance].parts[3] < 3) {
+                        
+                        printf("%s is incomplete\n", argv[file_num]);
+                        break;
+                    } else {
+                        // file exists and has enough parts, get file
+                        // attempt to open file
+                        FILE* file = fopen(argv[file_num], "w");
+                        if (!file) {
+                            printf("File %s cannot be created\n", argv[file_num]);
+                            break;
+                        }
+
+                        // hash filename to determine where to pull files
+                        MD5_CTX md5_context;
+                        MD5_Init(&md5_context);
+                        MD5_Update(&md5_context, argv[file_num], sizeof(argv[file_num]));
+                        MD5_Final(hash_bin, &md5_context);
+
+                        for (int i = 0; i < 8; i++) hash_offset |= (unsigned long long)hash_bin[i] << (i * 8);
+                        hash_offset %= NUM_SERVERS;
+
+                        // get each file part and write
+                        int file_success = 1;
+                        for (int file_part = 0; file_part < NUM_SERVERS; file_part++) {
+                            int server_index = (hash_offset+file_part) % NUM_SERVERS;
+                            // connect to server
+                            server_retry:
+                            if (server_connect(&server_socket, server, &serveraddr, server_addr[server_index], portno[server_index]) < 0) {
+                                if (!file_success) {
+                                    printf("%s is incomplete\n", argv[file_num]);
+                                    break;
+                                }
+                                file_part++;
+                                file_success = 0;
+                                goto server_retry;
+                            }
+                            file_success = 1;
+
+                            // send get request
+                            char file_name[BUFFERSIZE*2];
+                            sprintf(file_name, "GET %.10ld:%d:%s NULL",files[file_instance].time, file_part+1, files[file_instance].filename);
+                            if (send(server_socket, file_name, BUFFERSIZE, 0) < 0) error("ERROR in send");
+
+                            // get file from server and write to local instance
+                            while (1) {
+                                int n;
+                                bzero(buf, BUFFERSIZE);
+                                if ((n = recv(server_socket, buf, BUFFERSIZE, 0)) < 0) error("ERROR in recv");
+                                fwrite(buf, 1, 100, stdout);
+                                char* line = buf;
+                                int end_signal = 0;
+                                while (1) {
+                                    if (!strncmp(line, "END_SEND", strlen("END_SEND"))) {end_signal = 1; break;}
+
+                                    fwrite(line, 1, strlen(line), file);
+
+                                    line += strlen(line) + 1;
+                                    if (strlen(line) == 0) break;
+                                }
+
+                                if (end_signal) break;
+                            }
+                        }
+
+                        // if file was not complete (server shut down in the middle)
+                        if (!file_success) {
+                            printf("%s is incomplete\n", argv[file_num]);
+                            break;
+                        }
+                    }
+    
+                }
+            }
+
+        }
+
     }
 }
 
